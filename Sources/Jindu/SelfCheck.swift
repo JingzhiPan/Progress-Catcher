@@ -76,6 +76,15 @@ final class SelfCheck {
         check(title.contains("●"), "有事待處理時菜單欄出現小圓點")
         let delegate = NSApp.delegate as? AppDelegate
         check(delegate?.attentionCount == 4, "待處理共 4 件（實際：\(delegate?.attentionCount ?? -1)）")
+        // 菜單欄圖標本身存一張圖出來看
+        try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        if let glyph = statusItem.button?.image, let tiff = glyph.tiffRepresentation,
+           let rep = NSBitmapImageRep(data: tiff) {
+            check(glyph.isTemplate && glyph.size.height == 15, "菜單欄圖標是模板圖，高 15pt（實際 \(glyph.size)）")
+            try? rep.representation(using: .png, properties: [:])?.write(to: outDir.appendingPathComponent("0-菜單欄圖標.png"))
+        } else {
+            check(false, "菜單欄圖標畫得出來")
+        }
         let buttonFrame = statusItem.button?.window?.frame ?? .zero
         check(buttonFrame.width > 0, "菜單欄圖標已放上去（位置 \(Int(buttonFrame.minX)),\(Int(buttonFrame.minY))）")
 

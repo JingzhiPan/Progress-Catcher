@@ -67,9 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setUpStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let button = statusItem.button else { return }
-        let image = NSImage(systemSymbolName: "checkmark.square", accessibilityDescription: "進度表")
-        image?.isTemplate = true
-        button.image = image
+        button.image = MenuBarGlyph.image()
         button.imagePosition = .imageLeading
         button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         button.target = self

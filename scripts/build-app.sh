@@ -12,6 +12,7 @@ swift build -c release
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Jindu "$APP/Contents/MacOS/Jindu"
+cp Assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -19,6 +20,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key><string>Jindu</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleIdentifier</key><string>local.jindu.progress</string>
     <key>CFBundleName</key><string>進度表</string>
     <key>CFBundleDisplayName</key><string>進度表</string>

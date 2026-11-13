@@ -23,7 +23,10 @@ Mac 菜單欄上的進度跟進小工具：一段編號逐格蓋章、一張清�
 ./scripts/test.sh                  # 核心邏輯測試
 ./scripts/build-app.sh             # 打包成 build/進度表.app
 ./scripts/build-app.sh --install   # 另外複製到 /Applications
+./scripts/make-icon.sh             # 由 Assets/icon.svg 重新產生 Assets/AppIcon.icns
 ```
+
+圖標是一隻拱起來的毛毛蟲，由 `scripts/icon/inchworm.py` 畫出 SVG。那個腳本依賴 flat-creature 技能的生成器（不在倉庫裡）；要改造型或配色時設好 `FLAT_CREATURE_SCRIPTS` 再跑 `make-icon.sh`，平時直接用現成的 `Assets/icon.svg`。
 
 自檢（用假資料把面板真的開出來、送滑鼠事件、核對結果、各畫面存成 PNG；不碰真實資料）：
 
@@ -40,4 +43,4 @@ swift build && .build/debug/Jindu --selfcheck /tmp/jindu-check
 
 ## 還沒做
 
-全域快捷鍵、開機自啟、app 圖標。
+全域快捷鍵、開機自啟。
