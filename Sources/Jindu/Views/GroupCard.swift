@@ -1,10 +1,11 @@
 import JinduCore
 import SwiftUI
 
-/// 項目頁裡的一個分組：表頭（名字、範圍、進度、選單）加上格子或清單。
+/// 項目頁裡的一個分組：表頭（名字、範圍、進度、選單）加上格子、清單或循環任務。
 struct GroupCard: View {
     let projectID: UUID
     let group: TrackGroup
+    let now: Date
     @Binding var dragging: UUID?
     @EnvironmentObject var store: Store
     @State private var mode: Mode = .normal
@@ -13,7 +14,7 @@ struct GroupCard: View {
     @State private var draftEnd = ""
     @FocusState private var editFocused: Bool
 
-    private enum Mode { case normal, rename, range, confirmDelete }
+    private enum Mode { case normal, rename, range, deadline, confirmDelete }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -21,6 +22,16 @@ struct GroupCard: View {
 
             if mode == .range { rangeEditor }
             if mode == .confirmDelete { deleteRow }
+            if mode == .deadline {
+                DeadlineEditor(current: group.deadline) { date in
+                    store.setDeadline(date, group: group.id, project: projectID)
+                    mode = .normal
+                } onCancel: {
+                    mode = .normal
+                }
+            } else if let deadline = group.deadline, let pace = group.pace(now: now, clock: store.clock) {
+                PaceLine(pace: pace, deadline: deadline, now: now)
+            }
 
             if !group.collapsed {
                 switch group.kind {
@@ -30,12 +41,22 @@ struct GroupCard: View {
                     }
                 case .list:
                     ListBody(projectID: projectID, group: group)
+                case .routine:
+                    RoutineBody(projectID: projectID, group: group, now: now)
                 }
             }
         }
         .padding(12)
         .modifier(CardBackground())
         .opacity(dragging == group.id ? 0.6 : 1)
+    }
+
+    private var progressText: String {
+        if group.kind == .routine {
+            let states = group.routines.map { $0.state(now: now, clock: store.clock) }.filter(\.isDueToday)
+            return states.isEmpty ? "今日無" : "今日 \(states.filter(\.isSatisfied).count)/\(states.count)"
+        }
+        return group.isComplete ? "✓ \(group.doneCount)/\(group.total)" : "\(group.doneCount)/\(group.total)"
     }
 
     private var header: some View {
@@ -87,7 +108,7 @@ struct GroupCard: View {
 
             Spacer(minLength: 6)
 
-            Text(group.isComplete ? "✓ \(group.doneCount)/\(group.total)" : "\(group.doneCount)/\(group.total)")
+            Text(progressText)
                 .font(.system(size: 11, weight: .medium))
                 .monospacedDigit()
                 .foregroundStyle(Theme.accent)
@@ -104,6 +125,9 @@ struct GroupCard: View {
                         draftEnd = String(group.end)
                         mode = .range
                     }
+                }
+                if group.kind != .routine {
+                    Button(group.deadline == nil ? "設定截止日…" : "修改截止日…") { mode = .deadline }
                 }
                 Divider()
                 Button("刪除分組…") { mode = .confirmDelete }
@@ -154,6 +178,21 @@ struct GroupCard: View {
 enum DebugProbe {
     static var enabled = false
     static var gridFrames: [UUID: CGRect] = [:]
+    /// 其他想在自檢裡點的東西，按名字記位置
+    static var frames: [String: CGRect] = [:]
+}
+
+extension View {
+    /// 自檢時記下這個 view 在視窗裡的位置；平時什麼都不做。
+    func probe(_ name: String) -> some View {
+        background(GeometryReader { geo in
+            Color.clear
+                .onAppear { if DebugProbe.enabled { DebugProbe.frames[name] = geo.frame(in: .global) } }
+                .onChange(of: geo.frame(in: .global)) { _, frame in
+                    if DebugProbe.enabled { DebugProbe.frames[name] = frame }
+                }
+        })
+    }
 }
 
 /// 一排排編號格子。點一下蓋章／取消；按住拖過去可以連續蓋（或連續取消，看第一格原本的狀態）。

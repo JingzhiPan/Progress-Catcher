@@ -9,11 +9,13 @@ struct ProjectView: View {
     @State private var renaming = false
     @State private var draftName = ""
     @State private var confirmingDelete = false
+    @State private var editingDeadline = false
     @State private var draggingGroup: UUID?
     @FocusState private var renameFocused: Bool
 
     var body: some View {
         if let project = store.project(projectID) {
+            let now = Date()
             VStack(spacing: 0) {
                 HeaderBar(onBack: { panel.route = .home }) {
                     if renaming {
@@ -35,6 +37,7 @@ struct ProjectView: View {
                             renaming = true
                             renameFocused = true
                         }
+                        Button(project.deadline == nil ? "設定截止日…" : "修改截止日…") { editingDeadline = true }
                         Button(project.archived ? "取消歸檔" : "歸檔") {
                             store.setArchived(project.id, !project.archived)
                             if !project.archived { panel.route = .home }
@@ -49,10 +52,24 @@ struct ProjectView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         if confirmingDelete { deleteBanner(project) }
 
-                        ProjectStats(project: project)
+                        if editingDeadline {
+                            DeadlineEditor(current: project.deadline) { date in
+                                store.setDeadline(date, project: project.id)
+                                editingDeadline = false
+                            } onCancel: {
+                                editingDeadline = false
+                            }
+                            .padding(12)
+                            .modifier(CardBackground())
+                        }
+
+                        // 只有循環任務的項目沒有「已完成／總數」可言，就不顯示統計卡
+                        if project.total > 0 || project.deadline != nil {
+                            ProjectStats(project: project, now: now)
+                        }
 
                         ForEach(project.groups) { group in
-                            GroupCard(projectID: project.id, group: group, dragging: $draggingGroup)
+                            GroupCard(projectID: project.id, group: group, now: now, dragging: $draggingGroup)
                                 .onDrop(of: [.text], delegate: ReorderDropDelegate(target: group.id, dragging: $draggingGroup) { from, to in
                                     store.moveGroup(from, onto: to, project: project.id)
                                 })
@@ -96,10 +113,10 @@ struct ProjectView: View {
 
 private struct ProjectStats: View {
     let project: Project
+    let now: Date
     @EnvironmentObject var store: Store
 
     var body: some View {
-        let now = Date()
         let clock = store.clock
         let dates = project.doneDates
         let today = clock.count(of: dates, onDayOf: now)
@@ -122,6 +139,10 @@ private struct ProjectStats: View {
 
             ProgressBar(fraction: project.fraction)
 
+            if let deadline = project.deadline, let pace = project.pace(now: now, clock: clock) {
+                PaceLine(pace: pace, deadline: deadline, now: now)
+            }
+
             HStack(alignment: .bottom, spacing: 10) {
                 Text("近 14 天")
                     .font(.system(size: 10))
@@ -135,7 +156,7 @@ private struct ProjectStats: View {
     }
 }
 
-/// 新增分組：選形態（格子／清單），填名字，格子再填起止編號。
+/// 新增分組：選形態（格子／清單／循環任務），填名字，格子再填起止編號。
 private struct AddGroupForm: View {
     let projectID: UUID
     let isFirst: Bool
@@ -156,11 +177,11 @@ private struct AddGroupForm: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.dim)
                 KindToggle(kind: $kind)
-                Spacer()
+                Spacer(minLength: 0)
             }
 
             HStack(spacing: 6) {
-                TextField(kind == .grid ? "名稱（如 第三章）" : "名稱（如 交稿清單）", text: $name)
+                TextField(namePlaceholder, text: $name)
                     .modifier(FieldStyle())
                     .focused($focus, equals: .name)
                     .onSubmit(add)
@@ -195,6 +216,14 @@ private struct AddGroupForm: View {
         .modifier(CardBackground())
     }
 
+    private var namePlaceholder: String {
+        switch kind {
+        case .grid: return "名稱（如 第三章）"
+        case .list: return "名稱（如 交稿清單）"
+        case .routine: return "名稱（如 每日功課）"
+        }
+    }
+
     private func add() {
         problem = nil
         switch kind {
@@ -212,6 +241,8 @@ private struct AddGroupForm: View {
             }
         case .list:
             store.addListGroup(project: projectID, name: name)
+        case .routine:
+            store.addRoutineGroup(project: projectID, name: name)
         }
         name = ""
         start = ""
@@ -227,6 +258,7 @@ private struct KindToggle: View {
         HStack(spacing: 0) {
             segment("編號格子", .grid)
             segment("清單", .list)
+            segment("循環任務", .routine)
         }
         .padding(2)
         .background(Theme.border.opacity(0.5), in: RoundedRectangle(cornerRadius: 7))
@@ -238,7 +270,8 @@ private struct KindToggle: View {
         } label: {
             Text(title)
                 .font(.system(size: 11, weight: .medium))
-                .padding(.horizontal, 10)
+                .lineLimit(1)
+                .padding(.horizontal, 9)
                 .padding(.vertical, 3)
                 .foregroundStyle(kind == value ? Theme.fg : Theme.dim)
                 .background(kind == value ? Theme.surface : Color.clear, in: RoundedRectangle(cornerRadius: 5))

@@ -6,6 +6,8 @@ public enum GroupKind: String, Codable, Sendable {
     case grid
     /// 有名字的清單，逐項勾掉
     case list
+    /// 循環任務：按頻率反覆出現，沒有「總數」
+    case routine
 }
 
 public struct ListItem: Identifiable, Codable, Equatable, Sendable {
@@ -31,9 +33,13 @@ public struct TrackGroup: Identifiable, Equatable, Sendable {
     public var stamps: [Int: Date]
     /// 只對 list 有意義
     public var items: [ListItem]
+    /// 只對 routine 有意義
+    public var routines: [Routine]
     public var collapsed: Bool
-    /// 截止日（第二步用）
+    /// 截止日：那一天結束前做完
     public var deadline: Date?
+    /// 截止日是哪天設的，配速的均速線從這天起算
+    public var deadlineSetAt: Date?
 
     public init(id: UUID = UUID(), name: String, start: Int, end: Int) {
         self.id = id
@@ -43,8 +49,10 @@ public struct TrackGroup: Identifiable, Equatable, Sendable {
         self.end = end
         self.stamps = [:]
         self.items = []
+        self.routines = []
         self.collapsed = false
         self.deadline = nil
+        self.deadlineSetAt = nil
     }
 
     public init(id: UUID = UUID(), name: String, items: [ListItem] = []) {
@@ -55,14 +63,31 @@ public struct TrackGroup: Identifiable, Equatable, Sendable {
         self.end = 1
         self.stamps = [:]
         self.items = items
+        self.routines = []
         self.collapsed = false
         self.deadline = nil
+        self.deadlineSetAt = nil
+    }
+
+    public init(id: UUID = UUID(), name: String, routines: [Routine]) {
+        self.id = id
+        self.name = name
+        self.kind = .routine
+        self.start = 1
+        self.end = 1
+        self.stamps = [:]
+        self.items = []
+        self.routines = routines
+        self.collapsed = false
+        self.deadline = nil
+        self.deadlineSetAt = nil
     }
 
     public var total: Int {
         switch kind {
         case .grid: return max(0, end - start + 1)
         case .list: return items.count
+        case .routine: return 0
         }
     }
 
@@ -70,6 +95,7 @@ public struct TrackGroup: Identifiable, Equatable, Sendable {
         switch kind {
         case .grid: return stamps.keys.reduce(0) { $0 + ((start...end).contains($1) ? 1 : 0) }
         case .list: return items.reduce(0) { $0 + ($1.doneAt == nil ? 0 : 1) }
+        case .routine: return 0
         }
     }
 
@@ -80,6 +106,7 @@ public struct TrackGroup: Identifiable, Equatable, Sendable {
         switch kind {
         case .grid: return stamps.compactMap { (start...end).contains($0.key) ? $0.value : nil }
         case .list: return items.compactMap(\.doneAt)
+        case .routine: return []
         }
     }
 
@@ -95,7 +122,7 @@ public struct TrackGroup: Identifiable, Equatable, Sendable {
 
 extension TrackGroup: Codable {
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, start, end, stamps, items, collapsed, deadline
+        case id, name, kind, start, end, stamps, items, routines, collapsed, deadline, deadlineSetAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -113,8 +140,10 @@ extension TrackGroup: Codable {
         }
         stamps = parsed
         items = try c.decodeIfPresent([ListItem].self, forKey: .items) ?? []
+        routines = try c.decodeIfPresent([Routine].self, forKey: .routines) ?? []
         collapsed = try c.decodeIfPresent(Bool.self, forKey: .collapsed) ?? false
         deadline = try c.decodeIfPresent(Date.self, forKey: .deadline)
+        deadlineSetAt = try c.decodeIfPresent(Date.self, forKey: .deadlineSetAt)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -128,8 +157,10 @@ extension TrackGroup: Codable {
         for (n, date) in stamps { raw[String(n)] = date }
         try c.encode(raw, forKey: .stamps)
         try c.encode(items, forKey: .items)
+        try c.encode(routines, forKey: .routines)
         try c.encode(collapsed, forKey: .collapsed)
         try c.encodeIfPresent(deadline, forKey: .deadline)
+        try c.encodeIfPresent(deadlineSetAt, forKey: .deadlineSetAt)
     }
 }
 
@@ -143,8 +174,9 @@ public struct Project: Identifiable, Equatable, Sendable {
     public var archived: Bool
     /// 最近在做的那個分組，迷你條顯示它
     public var currentGroupID: UUID?
-    /// 截止日（第二步用）
+    /// 截止日：那一天結束前做完
     public var deadline: Date?
+    public var deadlineSetAt: Date?
 
     public init(id: UUID = UUID(), name: String, now: Date = Date()) {
         self.id = id
@@ -155,6 +187,7 @@ public struct Project: Identifiable, Equatable, Sendable {
         self.archived = false
         self.currentGroupID = nil
         self.deadline = nil
+        self.deadlineSetAt = nil
     }
 
     public var total: Int { groups.reduce(0) { $0 + $1.total } }
@@ -166,13 +199,13 @@ public struct Project: Identifiable, Equatable, Sendable {
     /// 迷你條該顯示的分組：最近在做的 → 第一個沒做完的 → 第一個。
     public var currentGroup: TrackGroup? {
         if let id = currentGroupID, let g = groups.first(where: { $0.id == id }) { return g }
-        return groups.first(where: { !$0.isComplete }) ?? groups.first
+        return groups.first(where: { $0.kind != .routine && !$0.isComplete }) ?? groups.first
     }
 }
 
 extension Project: Codable {
     enum CodingKeys: String, CodingKey {
-        case id, name, groups, createdAt, lastActiveAt, archived, currentGroupID, deadline
+        case id, name, groups, createdAt, lastActiveAt, archived, currentGroupID, deadline, deadlineSetAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -185,7 +218,18 @@ extension Project: Codable {
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         currentGroupID = try c.decodeIfPresent(UUID.self, forKey: .currentGroupID)
         deadline = try c.decodeIfPresent(Date.self, forKey: .deadline)
+        deadlineSetAt = try c.decodeIfPresent(Date.self, forKey: .deadlineSetAt)
     }
+}
+
+/// 提醒方式：該做的事沒做、配速落後時怎麼告訴你。
+public enum ReminderMode: String, Codable, Sendable, CaseIterable {
+    /// 菜單欄標記，外加每天定時發一條系統通知
+    case notification
+    /// 只在菜單欄圖標旁加一個小點
+    case badge
+    /// 不提醒，打開面板才看得到
+    case off
 }
 
 public struct Settings: Equatable, Sendable {
@@ -193,20 +237,31 @@ public struct Settings: Equatable, Sendable {
     public var dayStartHour: Int
     /// 菜單欄固定顯示哪個項目；nil 表示跟著最近操作的走。
     public var menuBarProjectID: UUID?
+    public var reminder: ReminderMode
+    /// 系統通知每天幾點幾分發
+    public var notifyHour: Int
+    public var notifyMinute: Int
 
-    public init(dayStartHour: Int = 0, menuBarProjectID: UUID? = nil) {
+    public init(dayStartHour: Int = 0, menuBarProjectID: UUID? = nil, reminder: ReminderMode = .badge,
+                notifyHour: Int = 21, notifyMinute: Int = 0) {
         self.dayStartHour = dayStartHour
         self.menuBarProjectID = menuBarProjectID
+        self.reminder = reminder
+        self.notifyHour = notifyHour
+        self.notifyMinute = notifyMinute
     }
 }
 
 extension Settings: Codable {
-    enum CodingKeys: String, CodingKey { case dayStartHour, menuBarProjectID }
+    enum CodingKeys: String, CodingKey { case dayStartHour, menuBarProjectID, reminder, notifyHour, notifyMinute }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         dayStartHour = try c.decodeIfPresent(Int.self, forKey: .dayStartHour) ?? 0
         menuBarProjectID = try c.decodeIfPresent(UUID.self, forKey: .menuBarProjectID)
+        reminder = (try? c.decodeIfPresent(ReminderMode.self, forKey: .reminder)) ?? .badge
+        notifyHour = try c.decodeIfPresent(Int.self, forKey: .notifyHour) ?? 21
+        notifyMinute = try c.decodeIfPresent(Int.self, forKey: .notifyMinute) ?? 0
     }
 }
 
@@ -235,7 +290,9 @@ public struct AppData: Equatable, Sendable {
            let p = projects.first(where: { $0.id == id && !$0.archived }) {
             return p
         }
-        return activeProjects.first
+        // 只有循環任務的項目沒有「已完成／總數」，不讓它把菜單欄的數字搶走
+        let active = activeProjects
+        return active.first(where: { $0.total > 0 }) ?? active.first
     }
 }
 

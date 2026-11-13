@@ -60,6 +60,9 @@ private func date(_ s: String) -> Date {
     let b = store.addProject(name: "乙", now: early.addingTimeInterval(60))
     let g = store.addGridGroup(project: a, name: "", start: 10, end: 19)!
     #expect(store.project(a)?.groups.first?.name == "第 1 組")
+    // 乙還是空的（沒有總數可顯示），菜單欄先跟著甲；乙有了內容之後，較新的乙排前面
+    #expect(store.data.focusProject?.id == a)
+    store.addGridGroup(project: b, name: "", start: 1, end: 3)
     #expect(store.data.focusProject?.id == b)
 
     let now = date("2026-11-13T10:00:00Z")

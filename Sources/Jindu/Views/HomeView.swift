@@ -15,6 +15,7 @@ struct HomeView: View {
         let active = store.data.activeProjects
         let archived = store.data.archivedProjects
         let todayTotal = active.reduce(0) { $0 + clock.count(of: $1.doneDates, onDayOf: now) }
+        let todayRoutines = store.data.todayRoutines(now: now, clock: clock)
 
         VStack(spacing: 0) {
             HeaderBar {
@@ -35,6 +36,10 @@ struct HomeView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
+                    if !todayRoutines.isEmpty {
+                        TodaySection(items: todayRoutines)
+                    }
+
                     if active.isEmpty {
                         Text("還沒有項目。\n在下面輸入名字，點「添加」開始記錄。")
                             .font(.system(size: 12))
@@ -132,6 +137,14 @@ private struct ProjectCard: View {
 
     var body: some View {
         let today = clock.count(of: project.doneDates, onDayOf: now)
+        let routines = project.groups.filter { $0.kind == .routine }.flatMap(\.routines)
+            .map { $0.state(now: now, clock: clock) }.filter(\.isDueToday)
+        let routinesDone = routines.filter(\.isSatisfied).count
+        // 只有循環任務的項目沒有總數，卡片改顯示今天做了幾件
+        let routineOnly = project.total == 0 && !routines.isEmpty
+        // 卡片上只放一條截止日：有落後／過期的先顯示它，否則顯示最近的那個
+        let deadlines = project.openDeadlines(now: now, clock: clock)
+        let nearest = deadlines.first(where: \.pace.needsAttention) ?? deadlines.first
 
         Button {
             panel.route = .project(project.id)
@@ -142,18 +155,25 @@ private struct ProjectCard: View {
                         .font(.system(size: 13, weight: .bold))
                         .lineLimit(1)
                     Spacer(minLength: 8)
-                    Text(project.isComplete ? "✓ \(project.doneCount)/\(project.total)" : "\(project.doneCount)/\(project.total)")
+                    Text(routineOnly
+                         ? "今日 \(routinesDone)/\(routines.count)"
+                         : (project.isComplete ? "✓ \(project.doneCount)/\(project.total)" : "\(project.doneCount)/\(project.total)"))
                         .font(.system(size: 12, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(Theme.accent)
                 }
 
-                ProgressBar(fraction: project.fraction)
+                ProgressBar(fraction: routineOnly ? Double(routinesDone) / Double(routines.count) : project.fraction)
 
                 HStack(spacing: 8) {
-                    Text(percentText(project.fraction))
+                    if !routineOnly {
+                        Text(percentText(project.fraction))
+                    }
                     if today > 0 {
                         Text("今日 +\(today)").foregroundStyle(Theme.accent)
+                    }
+                    if !routineOnly && !routines.isEmpty {
+                        Text("循環 \(routinesDone)/\(routines.count)")
                     }
                     Spacer()
                     Text(relativeDay(project.lastActiveAt, now: now, clock: clock))
@@ -161,6 +181,19 @@ private struct ProjectCard: View {
                 .font(.system(size: 11))
                 .monospacedDigit()
                 .foregroundStyle(Theme.dim)
+
+                if let nearest {
+                    HStack(spacing: 6) {
+                        PaceLine(pace: nearest.pace, deadline: nearest.deadline, now: now, detailed: false)
+                        // 截止日是某個分組的，就標出是哪一組
+                        if nearest.id != project.id, let group = project.groups.first(where: { $0.id == nearest.id }) {
+                            Text(group.name)
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.dim)
+                                .lineLimit(1)
+                        }
+                    }
+                }
             }
             .padding(12)
             .modifier(CardBackground())

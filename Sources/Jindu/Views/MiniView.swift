@@ -9,6 +9,7 @@ struct MiniView: View {
     var body: some View {
         let project = store.project(panel.miniProjectID).flatMap { $0.archived ? nil : $0 } ?? store.data.focusProject
         let group = project?.currentGroup
+        let now = Date()
 
         VStack(spacing: 0) {
             HeaderBar(height: 32) {
@@ -25,7 +26,7 @@ struct MiniView: View {
                 }
                 .allowsHitTesting(false)
             } trailing: {
-                if let group {
+                if let group, group.kind != .routine {
                     Text(group.isComplete ? "✓ \(group.doneCount)/\(group.total)" : "\(group.doneCount)/\(group.total)")
                         .font(.system(size: 11, weight: .medium))
                         .monospacedDigit()
@@ -51,6 +52,8 @@ struct MiniView: View {
                                 }
                             case .list:
                                 ListBody(projectID: project.id, group: group, showsAddField: false)
+                            case .routine:
+                                RoutineBody(projectID: project.id, group: group, now: now, showsAddForm: false)
                             }
                         }
                         .padding(8)

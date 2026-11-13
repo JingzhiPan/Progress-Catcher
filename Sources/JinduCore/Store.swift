@@ -128,6 +128,115 @@ public final class Store: ObservableObject {
         }
     }
 
+    @discardableResult
+    public func addRoutineGroup(project pid: UUID, name: String) -> UUID? {
+        var id: UUID?
+        withProject(pid) { p in
+            let group = TrackGroup(name: Self.groupName(name, fallback: "循環任務"), routines: [])
+            p.groups.append(group)
+            id = group.id
+        }
+        return id
+    }
+
+    // MARK: 截止日
+
+    /// 設定或移除（傳 nil）項目的截止日。
+    public func setDeadline(_ date: Date?, project pid: UUID, now: Date = Date()) {
+        withProject(pid) { p in
+            guard p.deadline != date else { return }
+            p.deadline = date
+            p.deadlineSetAt = date == nil ? nil : now
+        }
+    }
+
+    /// 設定或移除（傳 nil）分組的截止日。
+    public func setDeadline(_ date: Date?, group gid: UUID, project pid: UUID, now: Date = Date()) {
+        withGroup(gid, in: pid) { g in
+            guard g.deadline != date else { return }
+            g.deadline = date
+            g.deadlineSetAt = date == nil ? nil : now
+        }
+    }
+
+    // MARK: 循環任務
+
+    @discardableResult
+    public func addRoutine(_ title: String, rule: RoutineRule, group gid: UUID, project pid: UUID, now: Date = Date()) -> UUID? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, Self.isValidRule(rule) else { return nil }
+        var id: UUID?
+        withGroup(gid, in: pid) { g in
+            guard g.kind == .routine else { return }
+            let routine = Routine(title: trimmed, rule: rule, startDate: now)
+            g.routines.append(routine)
+            id = routine.id
+        }
+        return id
+    }
+
+    /// 點一下循環任務：今天該做還沒做完 → 記一次；已經做完 → 撤銷最近一次。今天沒輪到 → 不動。
+    public func tapRoutine(_ rid: UUID, group gid: UUID, project pid: UUID, now: Date = Date()) {
+        let clock = self.clock
+        withProject(pid) { p in
+            guard let gi = p.groups.firstIndex(where: { $0.id == gid }),
+                  let ri = p.groups[gi].routines.firstIndex(where: { $0.id == rid }) else { return }
+            let state = p.groups[gi].routines[ri].state(now: now, clock: clock)
+            guard state.isDueToday else { return }
+            if state.isSatisfied {
+                Self.removeLatestLog(&p.groups[gi].routines[ri], now: now, clock: clock)
+            } else {
+                p.groups[gi].routines[ri].log.append(now)
+                p.lastActiveAt = now
+            }
+        }
+    }
+
+    /// 撤銷本週期（或今天）最近的一次記錄。
+    public func undoRoutine(_ rid: UUID, group gid: UUID, project pid: UUID, now: Date = Date()) {
+        let clock = self.clock
+        withGroup(gid, in: pid) { g in
+            guard let ri = g.routines.firstIndex(where: { $0.id == rid }) else { return }
+            Self.removeLatestLog(&g.routines[ri], now: now, clock: clock)
+        }
+    }
+
+    public func renameRoutine(_ rid: UUID, group gid: UUID, project pid: UUID, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        withGroup(gid, in: pid) { g in
+            if let ri = g.routines.firstIndex(where: { $0.id == rid }) { g.routines[ri].title = trimmed }
+        }
+    }
+
+    public func deleteRoutine(_ rid: UUID, group gid: UUID, project pid: UUID) {
+        withGroup(gid, in: pid) { $0.routines.removeAll { $0.id == rid } }
+    }
+
+    private static func removeLatestLog(_ routine: inout Routine, now: Date, clock: DayClock) {
+        let today = clock.day(of: now)
+        var window = DateInterval(start: today, duration: 86400)
+        if case .quota(_, let per) = routine.rule,
+           let iv = clock.calendar.dateInterval(of: per == .week ? .weekOfYear : .month, for: today) {
+            window = iv
+        }
+        let inWindow = routine.log.indices.filter {
+            let day = clock.day(of: routine.log[$0])
+            return day >= window.start && day < window.end
+        }
+        guard let latest = inWindow.max(by: { routine.log[$0] < routine.log[$1] }) else { return }
+        routine.log.remove(at: latest)
+    }
+
+    public static func isValidRule(_ rule: RoutineRule) -> Bool {
+        switch rule {
+        case .daily: return true
+        case .weekdays(let days): return !days.isEmpty && days.allSatisfy { (1...7).contains($0) }
+        case .quota(let times, _): return (1...31).contains(times)
+        case .everyN(let days): return (2...365).contains(days)
+        }
+    }
+
     // MARK: 蓋章
 
     public func setStamp(_ n: Int, done: Bool, group gid: UUID, project pid: UUID, now: Date = Date()) {
@@ -201,6 +310,50 @@ public final class Store: ObservableObject {
     public func setMenuBarProject(_ id: UUID?) {
         guard data.settings.menuBarProjectID != id else { return }
         data.settings.menuBarProjectID = id
+        scheduleSave()
+    }
+
+    public func setReminder(_ mode: ReminderMode) {
+        guard data.settings.reminder != mode else { return }
+        data.settings.reminder = mode
+        scheduleSave()
+    }
+
+    public func setNotifyTime(hour: Int, minute: Int) {
+        let h = min(max(hour, 0), 23), m = min(max(minute, 0), 59)
+        guard data.settings.notifyHour != h || data.settings.notifyMinute != m else { return }
+        data.settings.notifyHour = h
+        data.settings.notifyMinute = m
+        scheduleSave()
+    }
+
+    // MARK: 匯出／匯入
+
+    public enum ImportError: Error, Equatable {
+        /// 不是這個 app 匯出的檔案
+        case notRecognized
+    }
+
+    public func exportData() throws -> Data {
+        try Persistence.encoder().encode(data)
+    }
+
+    /// 用檔案內容取代現有的全部資料。取代前會把現有資料另存一份到 backups/。
+    public func importData(_ raw: Data, now: Date = Date()) throws {
+        // 先確認檔案裡真的有 projects，免得一個不相干的 JSON 把資料清空。
+        struct Probe: Decodable { let projects: [Project] }
+        guard (try? Persistence.decoder().decode(Probe.self, from: raw)) != nil,
+              let incoming = try? Persistence.decoder().decode(AppData.self, from: raw) else {
+            throw ImportError.notRecognized
+        }
+        if let fileURL {
+            flush()
+            let dir = fileURL.deletingLastPathComponent().appendingPathComponent("backups")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let name = "匯入前-\(Int(now.timeIntervalSince1970)).json"
+            try? Persistence.save(data, to: dir.appendingPathComponent(name))
+        }
+        data = incoming
         scheduleSave()
     }
 

@@ -2,7 +2,7 @@ import AppKit
 import JinduCore
 
 /// 開發用自檢：`Jindu --selfcheck <輸出資料夾>`
-/// 用假資料（只在記憶體裡）把面板真的開出來，往格子上送滑鼠事件，核對結果，再把各個畫面存成 PNG。
+/// 用假資料（存在輸出資料夾的 data/ 底下）把面板真的開出來，往格子上送滑鼠事件，核對結果，再把各個畫面存成 PNG。
 /// 不碰真實的資料檔。
 @MainActor
 final class SelfCheck {
@@ -34,27 +34,48 @@ final class SelfCheck {
         let day: TimeInterval = 86400
 
         // --- 假資料 ---
-        let book = store.addProject(name: "示例譯稿", now: now.addingTimeInterval(-20 * day))
+        let book = store.addProject(name: "示例書稿", now: now.addingTimeInterval(-20 * day))
         let ch3 = store.addGridGroup(project: book, name: "第三章", start: 77, end: 124)!
         let ch4 = store.addGridGroup(project: book, name: "第四章", start: 125, end: 160)!
         let todo = store.addListGroup(project: book, name: "交稿前")!
         for (offset, n) in (77...95).enumerated() {
             store.setStamp(n, done: true, group: ch3, project: book, now: now.addingTimeInterval(-Double(13 - offset % 13) * day))
         }
-        let first = store.addItem("核對引文頁碼", group: todo, project: book)!
-        store.addItem("統一「儀式」譯名", group: todo, project: book)
+        let first = store.addItem("核對頁碼", group: todo, project: book)!
+        store.addItem("統一術語", group: todo, project: book)
         store.addItem("寄給編輯", group: todo, project: book)
         store.setItemDone(first, done: true, group: todo, project: book, now: now.addingTimeInterval(-2 * day))
+        // 截止日：整個項目 6 天後（5 天前設的，進度落後）；第四章 3 天後
+        store.setDeadline(now.addingTimeInterval(6 * day), project: book, now: now.addingTimeInterval(-5 * day))
+        store.setDeadline(now.addingTimeInterval(3 * day), group: ch4, project: book, now: now)
 
-        let thesis = store.addProject(name: "論文第二章", now: now.addingTimeInterval(-9 * day))
-        let sections = store.addGridGroup(project: thesis, name: "小節", start: 1, end: 12)!
-        for n in 1...5 { store.setStamp(n, done: true, group: sections, project: thesis, now: now.addingTimeInterval(-3 * day)) }
+        let course = store.addProject(name: "課程作業", now: now.addingTimeInterval(-9 * day))
+        let sections = store.addGridGroup(project: course, name: "小節", start: 1, end: 12)!
+        for n in 1...5 { store.setStamp(n, done: true, group: sections, project: course, now: now.addingTimeInterval(-3 * day)) }
+
+        // 循環任務
+        let habits = store.addProject(name: "日常", now: now.addingTimeInterval(-12 * day))
+        let daily = store.addRoutineGroup(project: habits, name: "每日功課")!
+        let words = store.addRoutine("背單字", rule: .daily, group: daily, project: habits, now: now.addingTimeInterval(-10 * day))!
+        for back in [9, 8, 6, 5, 4, 2, 1] {
+            store.tapRoutine(words, group: daily, project: habits, now: now.addingTimeInterval(-Double(back) * day))
+        }
+        let notes = store.addRoutine("寫筆記", rule: .quota(times: 3, per: .week), group: daily, project: habits, now: now.addingTimeInterval(-10 * day))!
+        store.tapRoutine(notes, group: daily, project: habits, now: now)
+        let todayWeekday = Calendar.current.component(.weekday, from: now)
+        store.addRoutine("運動", rule: .weekdays([todayWeekday % 7 + 1, (todayWeekday + 2) % 7 + 1]), group: daily, project: habits, now: now.addingTimeInterval(-10 * day))
+        store.addRoutine("整理書桌", rule: .everyN(days: 3), group: daily, project: habits, now: now.addingTimeInterval(-9 * day))
+
         store.setStamp(96, done: true, group: ch3, project: book, now: now.addingTimeInterval(-60))
 
         // --- 菜單欄 ---
         await pause(0.3)
         let title = statusItem.button?.title ?? ""
-        check(title.trimmingCharacters(in: .whitespaces) == "21/87", "菜單欄顯示當前項目進度（實際：\(title)）")
+        check(title.contains("21/87"), "菜單欄顯示當前項目進度（實際：\(title)）")
+        // 待處理：背單字、寫筆記(1/3)、整理書桌（起始日 +9 天，今天輪到）、項目截止日落後
+        check(title.contains("●"), "有事待處理時菜單欄出現小圓點")
+        let delegate = NSApp.delegate as? AppDelegate
+        check(delegate?.attentionCount == 4, "待處理共 4 件（實際：\(delegate?.attentionCount ?? -1)）")
         let buttonFrame = statusItem.button?.window?.frame ?? .zero
         check(buttonFrame.width > 0, "菜單欄圖標已放上去（位置 \(Int(buttonFrame.minX)),\(Int(buttonFrame.minY))）")
 
@@ -119,7 +140,7 @@ final class SelfCheck {
         let expected = dragged.map { 77 + $0 }
         let stampedNow = (store.project(book)?.groups[0].stamps.keys.filter { $0 > 96 } ?? []).sorted()
         check(stampedNow == expected, "按住拖過 \(expected.first!)–\(expected.last!) → 剛好這五格蓋上（實際：\(stampedNow)，\(metrics.cols) 欄）")
-        check(statusItem.button?.title.trimmingCharacters(in: .whitespaces) == "26/87", "菜單欄數字跟著變成 26/87（實際：\(statusItem.button?.title ?? "")）")
+        check(statusItem.button?.title.contains("26/87") == true, "菜單欄數字跟著變成 26/87（實際：\(statusItem.button?.title ?? "")）")
         snapshot("3-蓋章後")
 
         // --- 置頂 + 迷你條 ---
@@ -143,10 +164,52 @@ final class SelfCheck {
         await pause(0.4)
         check(panel.window.frame.size == fullFrame.size, "展開後回到原來的大小")
 
+        // --- 首頁「今天」：點一下循環任務 ---
+        panel.route = .home
+        await pause(0.5)
+        func routineLog(_ id: UUID) -> Int {
+            store.project(habits)?.groups[0].routines.first { $0.id == id }?.log.count ?? -1
+        }
+        if let box = DebugProbe.frames["today-背單字"] {
+            let height = panel.window.contentView?.bounds.height ?? 0
+            let point = NSPoint(x: box.midX, y: height - box.midY)
+            let before = routineLog(words)
+            mouse(.leftMouseDown, point)
+            await pause(0.08)
+            mouse(.leftMouseUp, point)
+            await pause(0.3)
+            check(routineLog(words) == before + 1, "在首頁「今天」點背單字 → 記一次")
+            check(delegate?.attentionCount == 3, "待處理減為 3 件（實際：\(delegate?.attentionCount ?? -1)）")
+        } else {
+            check(false, "首頁「今天」裡找得到背單字")
+        }
+        snapshot("7-首頁-今天")
+
+        panel.route = .project(habits)
+        await pause(0.5)
+        snapshot("7-循環任務")
+
+        // --- 匯出再匯入 ---
+        if let exported = try? store.exportData() {
+            let before = store.data
+            store.deleteProject(course)
+            let restored = (try? store.importData(exported)) != nil
+            check(restored && store.data.projects.count == before.projects.count, "匯出後刪掉一個項目，再匯入 → 項目都回來了")
+        } else {
+            check(false, "匯出資料")
+        }
+
         // --- 設定頁 ---
         panel.route = .settings
         await pause(0.4)
         snapshot("7-設定")
+        store.setReminder(.off)
+        await pause(0.2)
+        check(statusItem.button?.title.contains("●") == false, "提醒設成「不提醒」後小圓點消失")
+        store.setReminder(.notification)
+        await pause(0.3)
+        snapshot("7-設定-系統通知")
+        store.setReminder(.badge)
 
         // --- 深色 ---
         NSApp.appearance = NSAppearance(named: .darkAqua)

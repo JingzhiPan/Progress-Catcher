@@ -35,6 +35,8 @@ final class PanelController: NSObject, ObservableObject, NSWindowDelegate {
     @Published private(set) var mini = false
     /// 迷你條顯示哪個項目；nil 表示跟著菜單欄那個走。
     @Published var miniProjectID: UUID?
+    /// 每次打開面板、每過一分鐘加一：讓「今天」「剩幾天」這些跟時間有關的顯示重算。
+    @Published private(set) var clockTick = 0
 
     weak var statusButton: NSStatusBarButton?
 
@@ -44,6 +46,8 @@ final class PanelController: NSObject, ObservableObject, NSWindowDelegate {
     private var outsideMonitor: Any?
     private var lastHide = Date.distantPast
     private var settingFrame = false
+    /// 正在開「儲存／打開檔案」對話框：這段時間面板失去焦點不算「點到別處」。
+    private var modalActive = false
 
     private static let fullMin = NSSize(width: 300, height: 280)
     private static let miniMin = NSSize(width: 200, height: 76)
@@ -59,7 +63,7 @@ final class PanelController: NSObject, ObservableObject, NSWindowDelegate {
         static let popoverSize = "popoverSize"
     }
 
-    init(store: Store) {
+    init(store: Store, reminders: Reminders) {
         self.store = store
         panel = FloatingPanel(
             contentRect: NSRect(origin: .zero, size: Self.defaultFull),
@@ -89,6 +93,7 @@ final class PanelController: NSObject, ObservableObject, NSWindowDelegate {
 
         let root = RootView()
             .environmentObject(store)
+            .environmentObject(reminders)
             .environmentObject(self)
         let hosting = FirstMouseHostingView(rootView: root)
         hosting.sizingOptions = []
@@ -116,7 +121,24 @@ final class PanelController: NSObject, ObservableObject, NSWindowDelegate {
         }
     }
 
+    func refreshClock() { clockTick += 1 }
+
+    /// 開系統的檔案對話框。期間不讓面板自動收起，結束後把面板擺回來。
+    func runModal<T>(_ body: () -> T) -> T {
+        modalActive = true
+        removeOutsideMonitor()
+        NSApp.activate(ignoringOtherApps: true)
+        let result = body()
+        modalActive = false
+        if !panel.isVisible { show() } else if !pinned {
+            panel.makeKey()
+            installOutsideMonitor()
+        }
+        return result
+    }
+
     func show() {
+        refreshClock()
         let frame: NSRect
         if pinned {
             frame = pinnedFrame(size: savedSize(mini ? Key.miniSize : Key.fullSize) ?? (mini ? Self.defaultMini : Self.defaultFull))
@@ -184,7 +206,7 @@ final class PanelController: NSObject, ObservableObject, NSWindowDelegate {
     // MARK: NSWindowDelegate
 
     func windowDidResignKey(_ notification: Notification) {
-        if !pinned && panel.isVisible { hide(reason: "resignKey") }
+        if !pinned && !modalActive && panel.isVisible { hide(reason: "resignKey") }
     }
 
     func windowDidMove(_ notification: Notification) {
