@@ -4,10 +4,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="0.2.0"
+VERSION="0.3.1"
 APP="build/進度表.app"
 
-swift build -c release
+swift build -c release --product Jindu
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

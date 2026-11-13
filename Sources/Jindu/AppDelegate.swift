@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             store = Store(directory: Self.dataDirectory())
         }
+        // agent（MCP 服務）改了資料檔，這邊馬上重讀，面板和菜單欄跟著變
+        store.startWatching()
         reminders = Reminders(store: store)
         panel = PanelController(store: store, reminders: reminders)
         reminders.onOpen = { [weak self] in
@@ -47,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.store.refresh() // 保險：萬一檔案監聽漏了一次
                 self.refreshStatus(self.store.data)
                 self.panel.refreshClock()
                 self.reminders.tick()

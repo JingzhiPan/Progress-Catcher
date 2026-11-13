@@ -208,6 +208,9 @@ final class SelfCheck {
             check(false, "匯出資料")
         }
 
+        // --- agent 透過 MCP 服務改資料，app 這邊要自己跟上 ---
+        await checkAgent(book: book)
+
         // --- 設定頁 ---
         panel.route = .settings
         await pause(0.4)
@@ -236,6 +239,66 @@ final class SelfCheck {
         panel.window.cancelOperation(nil)
         await pause(0.2)
         check(!panel.isVisible, "未置頂時按 Esc 收起面板")
+    }
+
+    /// 真的把 MCP 服務跑起來（另一個行程），用 JSON-RPC 叫它加東西，再看這邊的 app 有沒有自己更新。
+    private func checkAgent(book: UUID) async {
+        guard let dataDir = store.fileURL?.deletingLastPathComponent(),
+              let server = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("JinduMCP"),
+              FileManager.default.isExecutableFile(atPath: server.path) else {
+            check(false, "找得到 MCP 服務的執行檔（要先 swift build）")
+            return
+        }
+        let requests: [[String: Any]] = [
+            ["jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "selfcheck", "version": "0"]]],
+            ["jsonrpc": "2.0", "method": "notifications/initialized"],
+            ["jsonrpc": "2.0", "id": 2, "method": "tools/list"],
+            ["jsonrpc": "2.0", "id": 3, "method": "tools/call",
+             "params": ["name": "add_grid", "arguments": ["project": "示例書稿", "name": "第五章", "start": 161, "end": 170]]],
+            ["jsonrpc": "2.0", "id": 4, "method": "tools/call",
+             "params": ["name": "mark_done", "arguments": ["project": "示例書稿", "group": "第五章", "cells": "161-163"]]],
+            ["jsonrpc": "2.0", "id": 5, "method": "tools/call",
+             "params": ["name": "mark_done", "arguments": ["project": "示例書稿", "group": "沒有這組", "cells": "1"]]],
+        ]
+        let input = requests.compactMap { try? JSONSerialization.data(withJSONObject: $0) }
+            .map { String(decoding: $0, as: UTF8.self) }.joined(separator: "\n") + "\n"
+
+        let process = Process()
+        process.executableURL = server
+        process.environment = ["JINDU_DATA_DIR": dataDir.path]
+        let stdin = Pipe(), stdout = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        do { try process.run() } catch {
+            check(false, "MCP 服務啟動：\(error.localizedDescription)")
+            return
+        }
+        stdin.fileHandleForWriting.write(Data(input.utf8))
+        try? stdin.fileHandleForWriting.close() // 關掉輸入，服務讀完就自己結束
+        let before = store.project(book)?.total ?? 0
+        await pause(1.0) // 這段時間 app 沒有主動做任何事，全靠檔案監聽
+        let output = String(decoding: stdout.fileHandleForReading.availableData, as: UTF8.self)
+        let replies = output.split(separator: "\n").compactMap {
+            (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
+        }
+        func result(_ id: Int) -> [String: Any]? {
+            replies.first { ($0["id"] as? Int) == id }?["result"] as? [String: Any]
+        }
+        check(replies.count == 5, "MCP 服務對 5 個請求各回一行，通知不回（實際 \(replies.count) 行）")
+        check((result(1)?["serverInfo"] as? [String: Any])?["name"] as? String == "progress-catcher", "initialize 握手成功")
+        check((result(2)?["tools"] as? [[String: Any]])?.count == 8, "tools/list 列出 8 個工具")
+        check(result(4)?["isError"] as? Bool == false, "agent 加分組、蓋章成功")
+        check(result(5)?["isError"] as? Bool == true, "agent 指錯分組時拿到錯誤說明而不是崩潰")
+
+        let chapter = store.project(book)?.groups.first { $0.name == "第五章" }
+        check(chapter?.doneCount == 3 && store.project(book)?.total == before + 10,
+              "app 沒重啟就看到了 agent 加的「第五章」和 3 個章（總數 \(before) → \(store.project(book)?.total ?? -1)）")
+        check(statusItem.button?.title.contains("/\(before + 10)") == true, "菜單欄數字也跟著變（實際：\(statusItem.button?.title ?? "")）")
+        panel.route = .project(book)
+        await pause(0.4)
+        snapshot("7-agent改完之後")
     }
 
     // MARK: 工具
